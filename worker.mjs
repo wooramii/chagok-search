@@ -15,18 +15,31 @@ function labeledValue(body,labels){
   if(match&&!/[<>\[\]{}]/.test(match[1]))values.add(match[1].trim());
  }return values.size===1?[...values][0]:'';
 }
+export function matchingBarcodeField(rawContent,query){
+ if(!validQuery('barcode',query)||typeof rawContent!=='string')return false;
+ const body=rawContent.normalize('NFKC').replace(/[*_`]/g,'');
+ // 검색 제목·URL·검색어 반복은 증거가 아닙니다. 원문의 바코드 필드를 대조합니다.
+ const fields=/^[ \t|>#•-]*(?:유통\s*바코드|상품\s*바코드|바코드|barcode(?:\s*(?:number|no\.?))?|bar\s+code|ean(?:[ -]?(?:8|13))?|gtin(?:[ -]?(?:8|12|13|14))?|upc(?:[ -]?[ae])?|國際條碼|国际条码|商品條碼|商品条码|條碼|条码|JAN(?:コード)?)[ \t]*[:：=|]?[ \t]*(?:\r?\n[ \t]*)?([0-9][0-9 \t-]*)(?=$|[|,;()<>])/gim;
+ const codes=new Set();for(const match of body.matchAll(fields)){
+  const code=match[1].replace(/[ \t-]/g,'');if(validQuery('barcode',code))codes.add(code);
+ }
+ // 여러 상품/규격의 서로 다른 바코드가 함께 있는 페이지도 제외합니다.
+ return codes.size===1&&codes.has(query);
+}
 export function productCandidates(results,mode,query){
  const seen=new Set();return (Array.isArray(results)?results:[]).slice(0,10).flatMap(result=>{
   const url=httpsUrl(result.url),title=text(result.title,200),body=text(result.raw_content||result.content,30000);
-  if(!url||!title||seen.has(url))return [];seen.add(url);
+  if(!url||!title||seen.has(url))return [];
+  if(mode==='barcode'&&!matchingBarcodeField(result.raw_content,query))return [];
+  seen.add(url);
   // 검색 결과에 명시된 값만 사용합니다. 브랜드·원재료·이미지를 추측하지 않습니다.
   const record={'제품명':labeledValue(body,['제품명','상품명','Product name'])||title,'제품정보출처':url};
   const brand=labeledValue(body,['브랜드','Brand']);if(brand)record['브랜드']=brand;
   const volumes=[...title.matchAll(/\b\d+(?:\.\d+)?\s*(?:ml|mL|ML|kg|KG|g|G|L|ℓ)\b/g)].map(m=>m[0]);
   if(new Set(volumes).size===1)record['용량']=volumes[0];
-  // Barcode query remains in the user's form; search hits do not prove GTIN identity.
-  const exact=mode==='barcode'&&(title+' '+body).includes(query);
-  return [{record,summary:text(result.content,450),warning:mode==='barcode'&&!exact?'원문에 입력한 바코드가 확인되지 않습니다. 다른 제품일 수 있습니다.':'원문의 제품명·브랜드 표기 또는 검색 제목과 표기된 용량을 사용합니다. 실제 포장과 확인하세요.'}];
+  const barcodeMatch=mode==='barcode'?{code:query,method:'source-field'}:undefined;
+  if(barcodeMatch)record['바코드']=query;
+  return [{record,...(barcodeMatch?{barcodeMatch}:{}),summary:text(result.content,450),warning:barcodeMatch?'원문의 바코드 필드가 입력 번호와 일치합니다. 제품명·포장도 확인하세요.':'원문의 제품명·브랜드 표기 또는 검색 제목과 표기된 용량을 사용합니다. 실제 포장과 확인하세요.'}];
  }).slice(0,5);
 }
 export function createHandler(fetcher=(...args)=>fetch(...args)){
